@@ -133,7 +133,7 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
   <div class="card">
     <div class="row">
       <label>cp</label>
-      <input type="number" id="newCp" min="1" max="99" value="3">
+      <input type="number" id="newCp" min="1" max="10" value="3">
       <select id="newTipo" onchange="aggiornaVarianti()">
         <option value="schede">schede</option>
         <option value="tappi">tappi</option>
@@ -151,6 +151,12 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
 let PROFILI = [];
 const QTY = {};
 let KERF = 1;
+let cutSeq = 0;                 // scarta le risposte arrivate in ritardo
+let cutTimer = null;            // debounce del calcolo taglio
+let cutAbort = null;            // annulla la richiesta in corso
+let cutPromise = Promise.resolve();
+let editingPieces = null;       // id del profilo con editor pezzi aperto
+let pezziEdit = [];
 
 function switchTab(n){
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===n));
@@ -160,8 +166,21 @@ function switchTab(n){
 }
 
 async function loadProfili(){
-  PROFILI = await (await fetch('/api/profiles')).json();
+  try{
+    const r = await fetch('/api/profiles');
+    if(!r.ok) throw new Error('risposta del server: HTTP ' + r.status);
+    PROFILI = await r.json();
+  }catch(e){
+    PROFILI = [];
+    document.getElementById('listaProfili').innerHTML =
+      '<p class="err">Impossibile caricare il catalogo: ' + escapeHtml(e.message) +
+      '. Controlla che il container sia attivo, poi ricarica la pagina.</p>';
+    document.getElementById('totali').innerHTML = '';
+    document.getElementById('cutResult').innerHTML = '';
+    return;
+  }
   aggiornaVarianti();
+  caricaKerf();
   renderLista();
   renderTotali();
   caricaMeta();
@@ -193,7 +212,17 @@ function caricaMeta(){
 
 function cambiaKerf(v){
   KERF = parseFloat(v);
+  try{ localStorage.setItem('ordine_kerf', String(KERF)); }catch(e){}
   renderTotali();
+}
+
+function caricaKerf(){
+  try{
+    const k = parseFloat(localStorage.getItem('ordine_kerf'));
+    if(k === 1 || k === 3) KERF = k;
+  }catch(e){}
+  const r = document.querySelector('input[name=kerf][value="' + KERF + '"]');
+  if(r) r.checked = true;
 }
 
 // ---- LISTA ORDINE ----
@@ -279,6 +308,8 @@ function renderTotali(){
   const el = document.getElementById('totali');
   if(!Object.keys(prof).length){
     el.innerHTML = '<p class="empty">Nessuna quantità inserita.</p>';
+    if(cutTimer){ clearTimeout(cutTimer); cutTimer = null; }
+    if(cutAbort){ cutAbort.abort(); cutAbort = null; }
     document.getElementById('cutResult').innerHTML = '';
     return;
   }
@@ -312,10 +343,21 @@ function renderTotali(){
   html += '</table>';
   el.innerHTML = html;
 
-  calcolaTaglio();
+  programmaTaglio();
 }
 
-let cutSeq = 0;   // numero dell'ultima richiesta: scarta le risposte arrivate in ritardo
+// ---- CALCOLO TAGLIO (debounce + annullamento) ----
+function programmaTaglio(){
+  if(cutTimer) clearTimeout(cutTimer);
+  cutTimer = setTimeout(()=>{ cutTimer = null; cutPromise = calcolaTaglio(); }, 400);
+}
+
+// usata dalla stampa: se c'e' un calcolo pendente lo esegue subito, altrimenti attende quello in corso
+async function attendiTaglio(){
+  if(cutTimer){ clearTimeout(cutTimer); cutTimer = null; cutPromise = calcolaTaglio(); }
+  await cutPromise;
+}
+
 async function calcolaTaglio(){
   const mySeq = ++cutSeq;
   const items = [];
@@ -325,42 +367,56 @@ async function calcolaTaglio(){
     if(q > 0) items.push({ profile_id: p.id, quantity: q });
   }
   const el = document.getElementById('cutResult');
+  if(cutAbort){ cutAbort.abort(); cutAbort = null; }
   if(!items.length){
     el.innerHTML = '';
     return;
   }
-  const r = await fetch('/api/cut', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ items, kerf: KERF })
-  });
-  const data = await r.json();
-  if(mySeq !== cutSeq) return;   // nel frattempo l'ordine è cambiato: questa risposta è vecchia
 
-  let html = '<h2>📏 Taglio Aste di Ottone (3000 mm)</h2>';
-  html += `<div class="summary-cut">
-    <div>Aste necessarie: <span class="big">${data.total_bars}</span></div>
-    <div>Scarto totale: <span class="big">${data.total_scrap} mm</span></div>
-    <div style="align-self:center;font-size:12px;color:#666">Kerf usato: ${data.kerf} mm</div>
-  </div>`;
+  const ctrl = new AbortController();
+  cutAbort = ctrl;
+  try{
+    const r = await fetch('/api/cut', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ items, kerf: KERF }),
+      signal: ctrl.signal
+    });
+    if(!r.ok) throw new Error('risposta del server: HTTP ' + r.status);
+    const data = await r.json();
+    if(mySeq !== cutSeq) return;   // nel frattempo l'ordine e' cambiato: questa risposta e' vecchia
 
-  // aste con lo stesso schema di taglio raggruppate (se il server non le invia, mostra le aste singole)
-  const lista = (data.groups && data.groups.length) ? data.groups
-    : data.bars.map(b => ({first:b.index, last:b.index, count:1, pieces:b.pieces, used:b.used, scrap:b.scrap}));
-  for(const g of lista){
-    const pct = ((g.scrap / 3000) * 100).toFixed(1);
-    const badge = g.count > 1 ? `${g.count}×` : `#${g.first}`;
-    const range = g.count > 1 ? `<div style="font-size:12px;color:#666;margin-top:2px">Aste #${g.first}–#${g.last} (taglio identico)</div>` : '';
-    html += `<div class="bar-card">
-      <div class="num-badge">${badge}</div>
-      <div class="pieces-list">${g.pieces.join(' + ')}${range}</div>
-      <div class="stats">
-        <span>Usato: <strong>${g.used} mm</strong></span>
-        <span>Scarto: <strong>${g.scrap} mm (${pct}%)</strong></span>
-      </div>
+    let html = '<h2>📏 Taglio Aste di Ottone (3000 mm)</h2>';
+    html += `<div class="summary-cut">
+      <div>Aste necessarie: <span class="big">${data.total_bars}</span></div>
+      <div>Scarto totale: <span class="big">${data.total_scrap} mm</span></div>
+      <div style="align-self:center;font-size:12px;color:#666">Kerf usato: ${data.kerf} mm</div>
     </div>`;
+
+    // aste con lo stesso schema di taglio raggruppate (se il server non le invia, mostra le aste singole)
+    const lista = (data.groups && data.groups.length) ? data.groups
+      : data.bars.map(b => ({first:b.index, last:b.index, count:1, pieces:b.pieces, used:b.used, scrap:b.scrap}));
+    for(const g of lista){
+      const pct = ((g.scrap / 3000) * 100).toFixed(1);
+      const badge = g.count > 1 ? `${g.count}×` : `#${g.first}`;
+      const range = g.count > 1 ? `<div style="font-size:12px;color:#666;margin-top:2px">Aste #${g.first}–#${g.last} (taglio identico)</div>` : '';
+      html += `<div class="bar-card">
+        <div class="num-badge">${badge}</div>
+        <div class="pieces-list">${g.pieces.join(' + ')}${range}</div>
+        <div class="stats">
+          <span>Usato: <strong>${g.used} mm</strong></span>
+          <span>Scarto: <strong>${g.scrap} mm (${pct}%)</strong></span>
+        </div>
+      </div>`;
+    }
+    el.innerHTML = html;
+  }catch(e){
+    if(e.name === 'AbortError') return;      // richiesta annullata di proposito
+    if(mySeq !== cutSeq) return;
+    el.innerHTML = '<p class="err">Calcolo del taglio non riuscito: ' + escapeHtml(e.message) + '</p>';
+  }finally{
+    if(cutAbort === ctrl) cutAbort = null;
   }
-  el.innerHTML = html;
 }
 
 // ---- CATALOGO ----
@@ -402,12 +458,106 @@ function renderCatalogo(){
     if(p.tipo==='tappi' && p.pieces_detail && p.pieces_detail.length){
       pzText += '<br><em class="muted">' + p.pieces_detail.map(x=>x.quantity+'×'+x.length_mm+'mm').join(' + ') + '</em>';
     }
+    let azioni = '';
+    if(p.tipo==='tappi'){
+      azioni += `<button class="sec" onclick="apriPezzi(${p.id})">✏️ pezzi</button> `;
+    }
+    azioni += `<button class="danger" onclick="eliminaProfilo(${p.id})">elimina</button>`;
     html += `<tr><td><strong>${p.code}</strong></td><td><em class="muted">${comp}</em></td>
              <td>${pzText}</td>
-             <td><button class="danger" onclick="eliminaProfilo(${p.id})">elimina</button></td></tr>`;
+             <td>${azioni}</td></tr>`;
+    if(editingPieces === p.id){
+      html += `<tr><td colspan="4">${editorPezziHtml(p)}</td></tr>`;
+    }
   }
   html += '</table>';
   el.innerHTML = html;
+}
+
+// ---- EDITOR PEZZI (profili tappi) ----
+function apriPezzi(id){
+  const p = PROFILI.find(x=>x.id===id);
+  if(!p) return;
+  editingPieces = id;
+  pezziEdit = (p.pieces_detail||[]).map(x=>({length_mm:x.length_mm, quantity:x.quantity}));
+  if(!pezziEdit.length) pezziEdit = [{length_mm:'', quantity:1}];
+  renderCatalogo();
+}
+
+function chiudiPezzi(){
+  editingPieces = null;
+  pezziEdit = [];
+  renderCatalogo();
+}
+
+function leggiPezziEdit(){
+  const righe = document.querySelectorAll('#pezziEditor .pezzo-row');
+  if(!righe.length) return;
+  pezziEdit = Array.from(righe).map(r=>({
+    length_mm: r.querySelector('.p-len').value,
+    quantity:  r.querySelector('.p-qty').value
+  }));
+}
+
+function aggiungiPezzo(){
+  leggiPezziEdit();
+  pezziEdit.push({length_mm:'', quantity:1});
+  renderCatalogo();
+}
+
+function togliPezzo(i){
+  leggiPezziEdit();
+  pezziEdit.splice(i,1);
+  if(!pezziEdit.length) pezziEdit = [{length_mm:'', quantity:1}];
+  renderCatalogo();
+}
+
+function editorPezziHtml(p){
+  let h = `<div id="pezziEditor" class="card"><h3>Pezzi di ${p.code} — lunghezza (mm) × quantità per profilo</h3>`;
+  pezziEdit.forEach((x,i)=>{
+    h += `<div class="row pezzo-row">
+      <input type="number" class="p-len" step="0.1" min="0.1" max="3000" value="${x.length_mm}" placeholder="mm">
+      <span class="muted">mm ×</span>
+      <input type="number" class="p-qty" step="1" min="1" value="${x.quantity}">
+      <button class="danger" onclick="togliPezzo(${i})">togli</button>
+    </div>`;
+  });
+  h += `<div class="row">
+      <button class="sec" onclick="aggiungiPezzo()">+ pezzo</button>
+      <button class="primary" onclick="salvaPezzi(${p.id})">💾 Salva</button>
+      <button class="sec" onclick="chiudiPezzi()">Annulla</button>
+    </div>
+    <em class="muted">Le misure modificano solo questo profilo. Il piano di taglio si ricalcola da solo.</em>
+  </div>`;
+  return h;
+}
+
+async function salvaPezzi(id){
+  leggiPezziEdit();
+  const pieces = [];
+  for(const x of pezziEdit){
+    const l = parseFloat(x.length_mm);
+    const q = parseInt(x.quantity,10);
+    if(!(l > 0) || l > 3000){ alert('Lunghezza non valida: ' + x.length_mm + ' (ammesso oltre 0 e fino a 3000 mm)'); return; }
+    if(!(q >= 1)){ alert('La quantità di un pezzo deve essere almeno 1'); return; }
+    pieces.push({length_mm:l, quantity:q});
+  }
+  if(!pieces.length){ alert('Serve almeno un pezzo'); return; }
+  try{
+    const r = await fetch('/api/profiles/'+id+'/pieces', {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pieces })
+    });
+    if(!r.ok){
+      const e = await r.json().catch(()=>({}));
+      throw new Error(e.error || ('HTTP ' + r.status));
+    }
+    editingPieces = null;
+    pezziEdit = [];
+    await loadProfili();
+    renderCatalogo();
+  }catch(e){ alert('Errore: ' + e.message); }
 }
 
 async function eliminaProfilo(id){
@@ -420,7 +570,7 @@ async function eliminaProfilo(id){
 }
 
 // ---- STAMPA / PDF ----
-function stampaPDF(){
+async function stampaPDF(){
   const cliente = document.getElementById('metaCliente').value.trim();
   const note = document.getElementById('metaNote').value.trim();
 
@@ -429,6 +579,8 @@ function stampaPDF(){
     alert('Inserisci almeno una quantità prima di stampare.');
     return;
   }
+
+  await attendiTaglio();   // il PDF deve contenere il taglio aggiornato, non quello vecchio
 
   const now = new Date();
   const dataStr = now.toLocaleDateString('it-IT', {day:'2-digit',month:'2-digit',year:'numeric'});
