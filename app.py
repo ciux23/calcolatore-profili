@@ -5,6 +5,7 @@ DB_PATH = os.environ.get('DB_PATH', '/data/profili.db')
 TAPPI_PER_SCHEDA = 5
 DA_CP_DIVISO = 6
 BAR_LENGTH = 3000
+MAX_CP = 10
 
 app = Flask(__name__, static_folder=None)
 
@@ -110,6 +111,8 @@ def api_create():
         cp_num = int(data['cp_num']); tipo = data['tipo'].lower(); variante = data['variante'].lower()
     except (KeyError, ValueError):
         return jsonify({'error': 'cp_num, tipo, variante richiesti'}), 400
+    if not 1 <= cp_num <= MAX_CP:
+        return jsonify({'error': f'cp deve essere tra 1 e {MAX_CP}'}), 400
     if tipo == 'schede' and variante not in ('dritte', 'smussi'):
         return jsonify({'error': 'variante schede: dritte o smussi'}), 400
     if tipo == 'tappi' and variante not in ('nero', 'bianco'):
@@ -147,6 +150,41 @@ def api_create():
 def api_delete(pid):
     con = get_db(); con.execute('DELETE FROM profiles WHERE id=?', (pid,)); con.commit()
     return '', 204
+
+@app.route('/api/profiles/<int:pid>/pieces', methods=['PUT'])
+def api_update_pieces(pid):
+    """Corregge le misure dei pezzi di un profilo tappi, senza ricrearlo."""
+    con = get_db()
+    row = con.execute('SELECT * FROM profiles WHERE id=?', (pid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'profilo non trovato'}), 404
+    if row['tipo'] != 'tappi':
+        return jsonify({'error': 'i pezzi si modificano solo sui profili tappi'}), 400
+
+    data = request.get_json() or {}
+    items = data.get('pieces')
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': 'serve almeno un pezzo'}), 400
+
+    parsed = []
+    for p in items:
+        try:
+            length = float(p['length_mm']); qty = int(p['quantity'])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': 'ogni pezzo richiede length_mm e quantity numerici'}), 400
+        if length <= 0 or length > BAR_LENGTH:
+            return jsonify({'error': f'lunghezza non valida: {length} (ammesso 0–{BAR_LENGTH} mm)'}), 400
+        if qty < 1:
+            return jsonify({'error': 'la quantità di un pezzo deve essere almeno 1'}), 400
+        parsed.append((length, qty))
+
+    con.execute('DELETE FROM profile_pieces WHERE profile_id=?', (pid,))
+    for length, qty in parsed:
+        con.execute('INSERT INTO profile_pieces (profile_id, length_mm, quantity) VALUES (?,?,?)',
+                    (pid, length, qty))
+    con.commit()
+    row = con.execute('SELECT * FROM profiles WHERE id=?', (pid,)).fetchone()
+    return jsonify(profile_dict(con, row))
 
 
 import time
