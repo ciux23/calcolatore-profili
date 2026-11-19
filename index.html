@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calcolatore Profili</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;max-width:1100px;margin:1.5rem auto;padding:0 1rem;color:#222;background:#fafafa}
+h1{margin:0 0 1rem;font-size:1.6rem}
+h2{margin:1.4rem 0 .5rem;font-size:.95rem;text-transform:uppercase;letter-spacing:.05em;color:#555;border-bottom:1px solid #ddd;padding-bottom:.3rem}
+.tabs{display:flex;gap:.3rem;margin-bottom:1rem;border-bottom:2px solid #ddd}
+.tabs button{background:none;border:0;padding:.6rem 1.2rem;font-size:15px;cursor:pointer;color:#555;border-bottom:2px solid transparent;margin-bottom:-2px}
+.tabs button.active{color:#06c;border-bottom-color:#06c;font-weight:600}
+button.primary{padding:.6rem 1.4rem;font-size:15px;cursor:pointer;background:#06c;color:#fff;border:0;border-radius:4px}
+button.primary:hover{background:#048}
+button.sec{background:#888;color:#fff;border:0;padding:.45rem .9rem;border-radius:4px;cursor:pointer;font-size:14px}
+button.sec:hover{background:#666}
+button.green{background:#2e7d32}
+button.green:hover{background:#1b5e20}
+button.danger{background:#c33;color:#fff;border:0;padding:.3rem .6rem;border-radius:4px;cursor:pointer;font-size:13px}
+button.danger:hover{background:#a22}
+table{border-collapse:collapse;width:100%;margin-top:.4rem;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+th,td{border-bottom:1px solid #e5e5e5;padding:.6rem .7rem;text-align:left;font-size:14px;vertical-align:middle}
+th{background:#f3f3f3;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#555}
+td.num,th.num{font-size:1.15rem;font-weight:700;color:#06c;text-align:right;width:120px}
+td.qty{width:130px;text-align:center;background:#f9fbff}
+td.qty input{width:90px;padding:.45rem;font-size:15px;text-align:center;border:1px solid #ccc;border-radius:4px;font-family:inherit;font-weight:600}
+td.qty input:focus{outline:2px solid #06c;border-color:#06c}
+td.qty input.has{background:#e3f2fd;color:#06c;border-color:#06c}
+.err{color:#b00;font-family:ui-monospace,monospace;font-size:13px;background:#fee;padding:.6rem;border-radius:4px}
+code{background:#eef;padding:.1rem .35rem;border-radius:3px;font-size:92%;font-family:ui-monospace,monospace}
+.hint{color:#666;font-size:14px;line-height:1.6}
+em.muted{color:#888;font-style:normal;font-size:92%}
+.card{background:#fff8e1;border:1px solid #ffd54f;border-radius:6px;padding:1rem;margin:.6rem 0}
+.card h3{margin:0 0 .6rem;font-size:.95rem}
+.row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
+.row label{font-size:14px;color:#555}
+input,select{padding:.4rem .5rem;font-size:14px;border:1px solid #bbb;border-radius:4px;font-family:inherit}
+input[type=number]{width:80px}
+.empty{color:#999;font-style:italic;padding:1.5rem;text-align:center;background:#fff;border-radius:6px}
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:.1rem .4rem;border-radius:3px;margin-left:.4rem}
+.b-coppia{background:#f3e5f5;color:#6a1b9a}
+.section-title{display:flex;align-items:center;gap:.6rem;margin:1.4rem 0 .4rem}
+.section-title h2{margin:0;border:none;flex:1;padding:0}
+tr.sub td{border-bottom:1px dashed #eee}
+tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
+.totals{background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
+.toolbar{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin:0 0 .8rem}
+.meta{background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:.8rem 1rem;margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap}
+.meta .field{display:flex;flex-direction:column;gap:.2rem;flex:1;min-width:200px}
+.meta label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.meta input{border:1px solid #ddd;padding:.45rem .6rem}
+.print-header{display:none}
+.kerf-selector{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.5rem;align-items:center;flex-wrap:wrap}
+.kerf-selector label{display:flex;align-items:center;gap:.4rem;font-size:14px;cursor:pointer}
+.kerf-selector input[type=radio]{cursor:pointer}
+.bar-card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.7rem 1rem;margin:.4rem 0;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+.bar-card .num-badge{background:#06c;color:#fff;font-weight:700;padding:.2rem .6rem;border-radius:4px;font-size:14px;min-width:50px;text-align:center}
+.bar-card .pieces-list{flex:1;font-size:14px}
+.bar-card .stats{font-size:13px;color:#666;display:flex;gap:1rem}
+.bar-card .stats strong{color:#222}
+.summary-cut{background:#e3f2fd;border:1px solid #90caf9;border-radius:6px;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:2rem;flex-wrap:wrap;font-size:15px}
+.summary-cut .big{font-size:1.4rem;font-weight:700;color:#06c}
+@media print {
+  body{background:#fff;margin:0;padding:0;max-width:none;font-size:12px}
+  h1{font-size:18px;margin:0 0 .6rem}
+  .tabs,.toolbar,.card,details,#tab-catalogo,.no-print,.kerf-selector{display:none !important}
+  .print-header{display:block;border-bottom:2px solid #222;padding-bottom:.6rem;margin-bottom:1rem}
+  .print-header h1{margin:0;font-size:18px}
+  .print-header .info{font-size:11px;color:#555;margin-top:.3rem}
+  .meta{border:none;box-shadow:none;padding:0;margin-bottom:1rem;background:none;border:1px solid #ccc;border-radius:4px}
+  .meta label{color:#555}
+  .meta input{border:none;border-bottom:1px solid #999;border-radius:0;padding:.2rem .3rem;font-size:12px}
+  .meta .field[data-empty="1"]{display:none}
+  table{box-shadow:none;border:1px solid #ccc;border-radius:0;page-break-inside:auto}
+  th,td{padding:.35rem .5rem;font-size:11px}
+  th{background:#eee !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  td.num{font-size:12px;color:#000;font-weight:700}
+  td.qty{display:none}
+  .qty-col{display:none}
+  tr{page-break-inside:avoid}
+  h2{margin:.8rem 0 .3rem;font-size:12px;color:#000;border-color:#999}
+  #listaProfili{display:none}
+  .totals{box-shadow:none}
+  .section-title h2{font-size:12px}
+  .bar-card{box-shadow:none;border:1px solid #ccc}
+  .summary-cut{box-shadow:none;background:#f0f0f0 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+</style></head><body>
+
+<div class="print-header">
+  <h1>Ordine Profili</h1>
+  <div class="info" id="printInfo"></div>
+</div>
+
+<h1 class="no-print">Calcolatore Profili</h1>
+<div class="tabs no-print">
+  <button data-tab="ordine" class="active" onclick="switchTab('ordine')">📝 Ordine</button>
+  <button data-tab="catalogo" onclick="switchTab('catalogo')">📖 Catalogo</button>
+</div>
+
+<div id="tab-ordine">
+  <div class="meta">
+    <div class="field">
+      <label>Cliente / Commessa</label>
+      <input type="text" id="metaCliente" placeholder="—" oninput="salvaMeta()">
+    </div>
+    <div class="field">
+      <label>Note</label>
+      <input type="text" id="metaNote" placeholder="—" oninput="salvaMeta()">
+    </div>
+  </div>
+
+  <div class="kerf-selector no-print">
+    <strong style="font-size:14px;color:#555">Tipo di taglio:</strong>
+    <label><input type="radio" name="kerf" value="1" onchange="cambiaKerf(this.value)" checked> Tronchese (kerf 1 mm)</label>
+    <label><input type="radio" name="kerf" value="3" onchange="cambiaKerf(this.value)"> Sega circolare (kerf 3 mm)</label>
+  </div>
+
+  <div class="toolbar no-print">
+    <button class="sec" onclick="azzera()">Azzera quantità</button>
+    <button class="green" onclick="stampaPDF()">🖨️ Stampa / PDF</button>
+  </div>
+
+  <div id="listaProfili"></div>
+
+  <h2>Riepilogo componenti</h2>
+  <div id="totali" class="totals"></div>
+
+  <div id="cutResult"></div>
+</div>
+
+<div id="tab-catalogo" style="display:none">
+  <h2>Aggiungi profilo</h2>
+  <div class="card">
+    <div class="row">
+      <label>cp</label>
+      <input type="number" id="newCp" min="1" max="99" value="3">
+      <select id="newTipo" onchange="aggiornaVarianti()">
+        <option value="schede">schede</option>
+        <option value="tappi">tappi</option>
+      </select>
+      <select id="newVariante"></select>
+      <button class="primary" onclick="creaProfilo()">➕ Aggiungi</button>
+    </div>
+    <em class="muted" id="newPreview"></em>
+  </div>
+  <h2>Catalogo (<span id="catCount">0</span>)</h2>
+  <div id="catalogoView"></div>
+</div>
+
+<script>
+let PROFILI = [];
+const QTY = {};
+let KERF = 1;
+
+function switchTab(n){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===n));
+  document.getElementById('tab-ordine').style.display = n==='ordine'?'':'none';
+  document.getElementById('tab-catalogo').style.display = n==='catalogo'?'':'none';
+  if(n==='catalogo') renderCatalogo();
+}
+
+async function loadProfili(){
+  PROFILI = await (await fetch('/api/profiles')).json();
+  aggiornaVarianti();
+  renderLista();
+  renderTotali();
+  caricaMeta();
+}
+
+async function creaProfiloAPI(cp_num,tipo,variante){
+  const r = await fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cp_num,tipo,variante})});
+  if(!r.ok){const e=await r.json();throw new Error(e.error||'errore');}
+  return await r.json();
+}
+
+// ---- META ----
+function salvaMeta(){
+  try{
+    localStorage.setItem('ordine_meta', JSON.stringify({
+      cliente: document.getElementById('metaCliente').value,
+      note: document.getElementById('metaNote').value
+    }));
+  }catch(e){}
+}
+function caricaMeta(){
+  try{
+    const m = JSON.parse(localStorage.getItem('ordine_meta')||'{}');
+    if(m.cliente) document.getElementById('metaCliente').value = m.cliente;
+    if(m.note) document.getElementById('metaNote').value = m.note;
+  }catch(e){}
+}
+
+function cambiaKerf(v){
+  KERF = parseFloat(v);
+  renderTotali();
+}
+
+// ---- LISTA ORDINE ----
+function renderLista(){
+  const el = document.getElementById('listaProfili');
+  if(!PROFILI.length){
+    el.innerHTML = '<p class="empty">Catalogo vuoto. Vai nella tab <strong>📖 Catalogo</strong> per aggiungere profili.</p>';
+    return;
+  }
+  const schede = PROFILI.filter(p=>p.tipo==='schede');
+  const tappi  = PROFILI.filter(p=>p.tipo==='tappi');
+
+  let html = '';
+  if(schede.length){
+    html += '<div class="section-title"><h2>🔩 Schede</h2></div>';
+    html += tableHtml(schede);
+  }
+  if(tappi.length){
+    html += '<div class="section-title"><h2>⚫ Tappi</h2></div>';
+    html += tableHtml(tappi);
+  }
+  el.innerHTML = html;
+}
+
+function tableHtml(profili){
+  let h = '<table><tr><th>Codice</th><th>Componenti base</th><th style="width:90px">Pezzi</th><th class="num qty-col">Qtà</th></tr>';
+  for(const p of profili){
+    const comp = p.components.map(c=>c.quantity+'× '+c.name).join(' + ');
+    let pezzi = p.pieces===2 ? '<span class="badge b-coppia">A + B</span>' : 'singolo';
+    if(p.tipo==='tappi' && p.pieces_detail && p.pieces_detail.length){
+      pezzi += ' <em class="muted">(' + p.pieces_detail.map(x=>x.quantity+'×'+x.length_mm+'mm').join(' + ') + ')</em>';
+    }
+    const v = QTY[p.id] || 0;
+    h += `<tr>
+      <td><strong>${p.code}</strong></td>
+      <td><em class="muted">${comp}</em></td>
+      <td>${pezzi}</td>
+      <td class="qty"><input type="number" min="0" step="1" value="${v||''}"
+           placeholder="0" class="${v?'has':''}" oninput="setQty(${p.id}, this)"></td>
+    </tr>`;
+  }
+  h += '</table>';
+  return h;
+}
+
+function setQty(id, input){
+  const v = parseInt(input.value,10);
+  QTY[id] = isNaN(v) || v < 0 ? 0 : v;
+  input.classList.toggle('has', QTY[id] > 0);
+  renderTotali();
+}
+
+function azzera(){
+  for(const k in QTY) delete QTY[k];
+  renderLista();
+  renderTotali();
+}
+
+// ---- TOTALI ----
+function renderTotali(){
+  const altri = {};
+  const prof = {};
+  const schede = { dritta: {tot:0, grano:0}, smussa: {tot:0, grano:0} };
+
+  for(const p of PROFILI){
+    const q = QTY[p.id] || 0;
+    if(!q) continue;
+    prof[p.code] = q;
+
+    if(p.tipo === 'schede'){
+      const key = p.variante === 'smussi' ? 'smussa' : 'dritta';
+      const nSchede = p.cp_num * q;
+      const nGrani  = Math.min(2, p.cp_num) * q;
+      schede[key].tot   += nSchede;
+      schede[key].grano += nGrani;
+    } else {
+      for(const c of p.components){
+        altri[c.name] = (altri[c.name]||0) + c.quantity*q;
+      }
+    }
+  }
+
+  const el = document.getElementById('totali');
+  if(!Object.keys(prof).length){
+    el.innerHTML = '<p class="empty">Nessuna quantità inserita.</p>';
+    document.getElementById('cutResult').innerHTML = '';
+    return;
+  }
+
+  let html = '<table><tr><th>Componente</th><th class="num">Quantità</th></tr>';
+
+  for(const fin of ['dritta','smussa']){
+    const d = schede[fin];
+    if(!d.tot) continue;
+    html += `<tr><td>scheda ${fin}</td><td class="num">${d.tot}</td></tr>`;
+    if(d.grano){
+      html += `<tr class="sub"><td>↳ di cui con grano filettato</td><td class="num">${d.grano}</td></tr>`;
+    }
+  }
+  for(const [n,q] of Object.entries(altri).sort()){
+    html += `<tr><td>${n}</td><td class="num">${q}</td></tr>`;
+  }
+  html += '</table>';
+
+  html += '<h2>Profili richiesti</h2><table><tr><th>Codice</th><th class="num">Qtà</th></tr>';
+  for(const [code,q] of Object.entries(prof)){
+    const p = PROFILI.find(x=>x.code===code);
+    if(p && p.pieces===2){
+      html += `<tr class="sub"><td colspan="2"><strong>${code}</strong> <em class="muted">— ${q} profili = coppia di pezzi</em></td></tr>`;
+      html += `<tr class="sub"><td>↳ lato A</td><td class="num">${q}</td></tr>`;
+      html += `<tr class="sub"><td>↳ lato B</td><td class="num">${q}</td></tr>`;
+    } else {
+      html += `<tr><td>${code}</td><td class="num">${q}</td></tr>`;
+    }
+  }
+  html += '</table>';
+  el.innerHTML = html;
+
+  calcolaTaglio();
+}
+
+let cutSeq = 0;   // numero dell'ultima richiesta: scarta le risposte arrivate in ritardo
+async function calcolaTaglio(){
+  const mySeq = ++cutSeq;
+  const items = [];
+  for(const p of PROFILI){
+    if(p.tipo !== 'tappi') continue;
+    const q = QTY[p.id] || 0;
+    if(q > 0) items.push({ profile_id: p.id, quantity: q });
+  }
+  const el = document.getElementById('cutResult');
+  if(!items.length){
+    el.innerHTML = '';
+    return;
+  }
+  const r = await fetch('/api/cut', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ items, kerf: KERF })
+  });
+  const data = await r.json();
+  if(mySeq !== cutSeq) return;   // nel frattempo l'ordine è cambiato: questa risposta è vecchia
+
+  let html = '<h2>📏 Taglio Aste di Ottone (3000 mm)</h2>';
+  html += `<div class="summary-cut">
+    <div>Aste necessarie: <span class="big">${data.total_bars}</span></div>
+    <div>Scarto totale: <span class="big">${data.total_scrap} mm</span></div>
+    <div style="align-self:center;font-size:12px;color:#666">Kerf usato: ${data.kerf} mm</div>
+  </div>`;
+
+  // aste con lo stesso schema di taglio raggruppate (se il server non le invia, mostra le aste singole)
+  const lista = (data.groups && data.groups.length) ? data.groups
+    : data.bars.map(b => ({first:b.index, last:b.index, count:1, pieces:b.pieces, used:b.used, scrap:b.scrap}));
+  for(const g of lista){
+    const pct = ((g.scrap / 3000) * 100).toFixed(1);
+    const badge = g.count > 1 ? `${g.count}×` : `#${g.first}`;
+    const range = g.count > 1 ? `<div style="font-size:12px;color:#666;margin-top:2px">Aste #${g.first}–#${g.last} (taglio identico)</div>` : '';
+    html += `<div class="bar-card">
+      <div class="num-badge">${badge}</div>
+      <div class="pieces-list">${g.pieces.join(' + ')}${range}</div>
+      <div class="stats">
+        <span>Usato: <strong>${g.used} mm</strong></span>
+        <span>Scarto: <strong>${g.scrap} mm (${pct}%)</strong></span>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+// ---- CATALOGO ----
+function aggiornaVarianti(){
+  const t = document.getElementById('newTipo').value;
+  const s = document.getElementById('newVariante');
+  const vars = t==='schede'?['dritte','smussi']:['nero','bianco'];
+  s.innerHTML = vars.map(v=>`<option value="${v}">${v}</option>`).join('');
+  aggiornaPreview();
+}
+
+function aggiornaPreview(){
+  const cp = parseInt(document.getElementById('newCp').value,10)||0;
+  const t = document.getElementById('newTipo').value;
+  const v = document.getElementById('newVariante').value;
+  const pz = cp>=6?'coppia (lato A + B)':'pezzo singolo';
+  const comp = t==='schede'?('scheda '+v+' × '+cp):('tappo '+v+' × '+(cp*5));
+  document.getElementById('newPreview').textContent = '→ cp'+String(cp).padStart(2,'0')+' '+t+' '+v+' | '+pz+' | '+comp;
+}
+
+document.getElementById('newCp').addEventListener('input',aggiornaPreview);
+
+async function creaProfilo(){
+  const cp = parseInt(document.getElementById('newCp').value,10);
+  const t = document.getElementById('newTipo').value;
+  const v = document.getElementById('newVariante').value;
+  try{ await creaProfiloAPI(cp,t,v); await loadProfili(); renderCatalogo(); }
+  catch(e){ alert('Errore: '+e.message); }
+}
+
+function renderCatalogo(){
+  document.getElementById('catCount').textContent = PROFILI.length;
+  const el = document.getElementById('catalogoView');
+  if(!PROFILI.length){ el.innerHTML='<p class="empty">Catalogo vuoto.</p>'; return; }
+  let html = '<table><tr><th>Codice</th><th>Componenti</th><th>Pezzi</th><th></th></tr>';
+  for(const p of PROFILI){
+    const comp = p.components.map(c=>c.quantity+'× '+c.name).join(' + ');
+    let pzText = p.pieces===2?'A + B':'1';
+    if(p.tipo==='tappi' && p.pieces_detail && p.pieces_detail.length){
+      pzText += '<br><em class="muted">' + p.pieces_detail.map(x=>x.quantity+'×'+x.length_mm+'mm').join(' + ') + '</em>';
+    }
+    html += `<tr><td><strong>${p.code}</strong></td><td><em class="muted">${comp}</em></td>
+             <td>${pzText}</td>
+             <td><button class="danger" onclick="eliminaProfilo(${p.id})">elimina</button></td></tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+}
+
+async function eliminaProfilo(id){
+  const p = PROFILI.find(x=>x.id===id);
+  if(!confirm('Eliminare "'+p.code+'"?')) return;
+  await fetch('/api/profiles/'+id,{method:'DELETE'});
+  delete QTY[id];
+  await loadProfili();
+  renderCatalogo();
+}
+
+// ---- STAMPA / PDF ----
+function stampaPDF(){
+  const cliente = document.getElementById('metaCliente').value.trim();
+  const note = document.getElementById('metaNote').value.trim();
+
+  const qualcosa = Object.values(QTY).some(v => v > 0);
+  if(!qualcosa){
+    alert('Inserisci almeno una quantità prima di stampare.');
+    return;
+  }
+
+  const now = new Date();
+  const dataStr = now.toLocaleDateString('it-IT', {day:'2-digit',month:'2-digit',year:'numeric'});
+  const oraStr = now.toLocaleTimeString('it-IT', {hour:'2-digit',minute:'2-digit'});
+  let info = 'Data: ' + dataStr + ' ' + oraStr;
+  if(cliente) info += ' &nbsp;·&nbsp; Cliente/Commessa: <strong>' + escapeHtml(cliente) + '</strong>';
+  if(note)    info += ' &nbsp;·&nbsp; Note: <em>' + escapeHtml(note) + '</em>';
+  document.getElementById('printInfo').innerHTML = info;
+
+  const oldTitle = document.title;
+  const fname = 'Ordine' + (cliente ? '_' + cliente.replace(/\s+/g,'-') : '') + '_' + now.toISOString().slice(0,10);
+  document.title = fname;
+
+  window.print();
+  setTimeout(()=>{ document.title = oldTitle; }, 500);
+}
+
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+loadProfili();
+</script>
+</body></html>

@@ -1,0 +1,9 @@
+services:
+  calcolatore:
+    image: ghcr.io/ciux23/calcolatore-profili:latest
+    container_name: calcolatore-profili
+    ports:
+      - "8082:5000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
