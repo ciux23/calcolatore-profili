@@ -31,6 +31,9 @@ code{background:#eef;padding:.1rem .35rem;border-radius:3px;font-size:92%;font-f
 em.muted{color:#888;font-style:normal;font-size:92%}
 .card{background:#fff8e1;border:1px solid #ffd54f;border-radius:6px;padding:1rem;margin:.6rem 0}
 .card h3{margin:0 0 .6rem;font-size:.95rem}
+.restore-banner{background:#fff8e1;border:1px solid #ffd54f;border-left:4px solid #f9a825;border-radius:6px;padding:.7rem 1rem;margin:0 0 1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;font-size:14px;color:#5d4037}
+.restore-banner strong{color:#e65100}
+.restore-banner button{margin-left:auto}
 .row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
 .row label{font-size:14px;color:#555}
 input,select{padding:.4rem .5rem;font-size:14px;border:1px solid #bbb;border-radius:4px;font-family:inherit}
@@ -98,6 +101,11 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
 </div>
 
 <div id="tab-ordine">
+  <div id="restoreBanner" class="restore-banner no-print" style="display:none">
+    <span id="restoreText"></span>
+    <button class="sec" onclick="azzera()">Azzera e inizia nuovo</button>
+  </div>
+
   <div class="meta">
     <div class="field">
       <label>Cliente / Commessa</label>
@@ -181,6 +189,7 @@ async function loadProfili(){
   }
   aggiornaVarianti();
   caricaKerf();
+  caricaOrdine();
   renderLista();
   renderTotali();
   caricaMeta();
@@ -208,6 +217,50 @@ function caricaMeta(){
     if(m.cliente) document.getElementById('metaCliente').value = m.cliente;
     if(m.note) document.getElementById('metaNote').value = m.note;
   }catch(e){}
+}
+
+// ---- ORDINE PERSISTENTE ----
+function salvaOrdine(){
+  try{
+    const voci = {};
+    for(const k in QTY){ if(QTY[k] > 0) voci[k] = QTY[k]; }
+    if(Object.keys(voci).length){
+      localStorage.setItem('ordine_qty', JSON.stringify({ qty: voci, ts: Date.now() }));
+    }else{
+      localStorage.removeItem('ordine_qty');
+    }
+  }catch(e){}
+}
+
+function caricaOrdine(){
+  const banner = document.getElementById('restoreBanner');
+  let salvato = null;
+  try{ salvato = JSON.parse(localStorage.getItem('ordine_qty')||'null'); }catch(e){}
+  for(const k in QTY) delete QTY[k];
+  if(!salvato || !salvato.qty){ banner.style.display = 'none'; return; }
+
+  const validi = {};
+  for(const k in salvato.qty){
+    const p = PROFILI.find(x => String(x.id) === String(k));
+    const v = parseInt(salvato.qty[k], 10);
+    if(p && v > 0) validi[p.id] = v;   // scarta i profili cancellati dal catalogo
+  }
+  Object.assign(QTY, validi);
+
+  if(!Object.keys(validi).length){
+    banner.style.display = 'none';
+    try{ localStorage.removeItem('ordine_qty'); }catch(e){}
+    return;
+  }
+  const quando = salvato.ts ? new Date(salvato.ts) : null;
+  const txt = quando ? quando.toLocaleString('it-IT', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'data sconosciuta';
+  document.getElementById('restoreText').innerHTML =
+    'Ordine del <strong>' + escapeHtml(txt) + '</strong> ripristinato.';
+  banner.style.display = '';
+}
+
+function nascondiBanner(){
+  document.getElementById('restoreBanner').style.display = 'none';
 }
 
 function cambiaKerf(v){
@@ -272,11 +325,14 @@ function setQty(id, input){
   const v = parseInt(input.value,10);
   QTY[id] = isNaN(v) || v < 0 ? 0 : v;
   input.classList.toggle('has', QTY[id] > 0);
+  salvaOrdine();
   renderTotali();
 }
 
 function azzera(){
   for(const k in QTY) delete QTY[k];
+  salvaOrdine();
+  nascondiBanner();
   renderLista();
   renderTotali();
 }
@@ -565,6 +621,7 @@ async function eliminaProfilo(id){
   if(!confirm('Eliminare "'+p.code+'"?')) return;
   await fetch('/api/profiles/'+id,{method:'DELETE'});
   delete QTY[id];
+  salvaOrdine();
   await loadProfili();
   renderCatalogo();
 }
