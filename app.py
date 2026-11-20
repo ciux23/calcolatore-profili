@@ -1,7 +1,8 @@
-import os, sqlite3
-from flask import Flask, request, jsonify, g, send_from_directory
+import os, sqlite3, datetime
+from flask import Flask, request, jsonify, g, send_from_directory, send_file
 
 DB_PATH = os.environ.get('DB_PATH', '/data/profili.db')
+ARCHIVIO_DIR = os.environ.get('ARCHIVIO_DIR', '/data/archivio')
 TAPPI_PER_SCHEDA = 5
 DA_CP_DIVISO = 6
 BAR_LENGTH = 3000
@@ -68,6 +69,17 @@ def init_db():
             profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
             length_mm REAL NOT NULL,
             quantity INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            po TEXT,
+            notes TEXT,
+            kerf REAL,
+            filename TEXT NOT NULL,
+            size INTEGER,
+            total_bars INTEGER,
+            total_scrap REAL
         );
     ''')
     cur = con.execute("SELECT id, cp_num FROM profiles WHERE tipo='tappi'")
@@ -185,6 +197,88 @@ def api_update_pieces(pid):
     con.commit()
     row = con.execute('SELECT * FROM profiles WHERE id=?', (pid,)).fetchone()
     return jsonify(profile_dict(con, row))
+
+
+# ---- ARCHIVIO ORDINI (PDF di produzione) ----
+
+def _safe_po(po):
+    return ''.join(c if (c.isalnum() or c in '-_') else '-' for c in (po or '')).strip('-')
+
+@app.route('/api/orders', methods=['POST'])
+def api_create_order():
+    data = request.get_json() or {}
+    html_content = data.get('html') or ''
+    po = (data.get('po') or '').strip()
+    notes = (data.get('notes') or '').strip()
+    kerf = data.get('kerf')
+    total_bars = data.get('total_bars')
+    total_scrap = data.get('total_scrap')
+
+    if not html_content:
+        return jsonify({'error': 'html mancante'}), 400
+
+    now = datetime.datetime.now()
+    date_str = now.strftime('%Y-%m-%d')
+    year_dir = os.path.join(ARCHIVIO_DIR, str(now.year))
+    os.makedirs(year_dir, exist_ok=True)
+
+    safe = _safe_po(po)
+    base = f"{date_str}_{safe}" if safe else f"{date_str}_senza-PO"
+
+    filename = base + '.pdf'
+    n = 2
+    while os.path.exists(os.path.join(year_dir, filename)):
+        filename = f"{base}_{n}.pdf"
+        n += 1
+    filepath = os.path.join(year_dir, filename)
+
+    try:
+        from weasyprint import HTML
+        HTML(string=html_content).write_pdf(filepath)
+    except Exception as e:
+        return jsonify({'error': f'generazione PDF fallita: {e}'}), 500
+
+    size = os.path.getsize(filepath)
+    rel = f"{now.year}/{filename}"
+
+    con = get_db()
+    cur = con.execute(
+        'INSERT INTO orders (po, notes, kerf, filename, size, total_bars, total_scrap) VALUES (?,?,?,?,?,?,?)',
+        (po or None, notes or None, kerf, rel, size, total_bars, total_scrap))
+    con.commit()
+    oid = cur.lastrowid
+
+    return jsonify({'id': oid, 'filename': filename, 'url': f'/api/orders/{oid}/pdf'}), 201
+
+@app.route('/api/orders', methods=['GET'])
+def api_list_orders():
+    con = get_db()
+    rows = con.execute('SELECT id, created_at, po, notes, kerf, filename, size, total_bars, total_scrap FROM orders ORDER BY id DESC').fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/orders/<int:oid>/pdf', methods=['GET'])
+def api_order_pdf(oid):
+    con = get_db()
+    row = con.execute('SELECT filename FROM orders WHERE id=?', (oid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'ordine non trovato'}), 404
+    filepath = os.path.join(ARCHIVIO_DIR, row['filename'])
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'file non trovato'}), 404
+    return send_file(filepath, mimetype='application/pdf')
+
+@app.route('/api/orders/<int:oid>', methods=['DELETE'])
+def api_delete_order(oid):
+    con = get_db()
+    row = con.execute('SELECT filename FROM orders WHERE id=?', (oid,)).fetchone()
+    if not row:
+        return jsonify({'error': 'ordine non trovato'}), 404
+    filepath = os.path.join(ARCHIVIO_DIR, row['filename'])
+    if os.path.exists(filepath):
+        os.remove(filepath)
+    con.execute('DELETE FROM orders WHERE id=?', (oid,))
+    con.commit()
+    return '', 204
 
 
 import time
