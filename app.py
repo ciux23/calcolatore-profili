@@ -1,4 +1,4 @@
-import os, sqlite3, datetime
+import os, sqlite3, datetime, json
 from flask import Flask, request, jsonify, g, send_from_directory, send_file
 
 DB_PATH = os.environ.get('DB_PATH', '/data/profili.db')
@@ -6,7 +6,6 @@ ARCHIVIO_DIR = os.environ.get('ARCHIVIO_DIR', '/data/archivio')
 TAPPI_PER_SCHEDA = 5
 DA_CP_DIVISO = 6
 BAR_LENGTH = 3000
-MAX_CP = 10
 
 app = Flask(__name__, static_folder=None)
 
@@ -79,9 +78,15 @@ def init_db():
             filename TEXT NOT NULL,
             size INTEGER,
             total_bars INTEGER,
-            total_scrap REAL
+            total_scrap REAL,
+            snapshot TEXT
         );
     ''')
+    # Migrazione: aggiungi snapshot se mancante
+    cols = [r[1] for r in con.execute("PRAGMA table_info(orders)").fetchall()]
+    if 'snapshot' not in cols:
+        con.execute("ALTER TABLE orders ADD COLUMN snapshot TEXT")
+    
     cur = con.execute("SELECT id, cp_num FROM profiles WHERE tipo='tappi'")
     for row in cur.fetchall():
         pid, cp_num = row[0], row[1]
@@ -123,8 +128,6 @@ def api_create():
         cp_num = int(data['cp_num']); tipo = data['tipo'].lower(); variante = data['variante'].lower()
     except (KeyError, ValueError):
         return jsonify({'error': 'cp_num, tipo, variante richiesti'}), 400
-    if not 1 <= cp_num <= MAX_CP:
-        return jsonify({'error': f'cp deve essere tra 1 e {MAX_CP}'}), 400
     if tipo == 'schede' and variante not in ('dritte', 'smussi'):
         return jsonify({'error': 'variante schede: dritte o smussi'}), 400
     if tipo == 'tappi' and variante not in ('nero', 'bianco'):
@@ -165,7 +168,6 @@ def api_delete(pid):
 
 @app.route('/api/profiles/<int:pid>/pieces', methods=['PUT'])
 def api_update_pieces(pid):
-    """Corregge le misure dei pezzi di un profilo tappi, senza ricrearlo."""
     con = get_db()
     row = con.execute('SELECT * FROM profiles WHERE id=?', (pid,)).fetchone()
     if not row:
@@ -185,9 +187,9 @@ def api_update_pieces(pid):
         except (KeyError, TypeError, ValueError):
             return jsonify({'error': 'ogni pezzo richiede length_mm e quantity numerici'}), 400
         if length <= 0 or length > BAR_LENGTH:
-            return jsonify({'error': f'lunghezza non valida: {length} (ammesso 0–{BAR_LENGTH} mm)'}), 400
+            return jsonify({'error': f'lunghezza non valida: {length}'}), 400
         if qty < 1:
-            return jsonify({'error': 'la quantità di un pezzo deve essere almeno 1'}), 400
+            return jsonify({'error': 'quantità minima 1'}), 400
         parsed.append((length, qty))
 
     con.execute('DELETE FROM profile_pieces WHERE profile_id=?', (pid,))
@@ -199,7 +201,7 @@ def api_update_pieces(pid):
     return jsonify(profile_dict(con, row))
 
 
-# ---- ARCHIVIO ORDINI (PDF di produzione) ----
+# ---- ARCHIVIO ORDINI ----
 
 def _safe_po(po):
     return ''.join(c if (c.isalnum() or c in '-_') else '-' for c in (po or '')).strip('-')
@@ -213,6 +215,7 @@ def api_create_order():
     kerf = data.get('kerf')
     total_bars = data.get('total_bars')
     total_scrap = data.get('total_scrap')
+    items = data.get('items')  # snapshot: [{profile_id, quantity}]
 
     if not html_content:
         return jsonify({'error': 'html mancante'}), 400
@@ -240,11 +243,12 @@ def api_create_order():
 
     size = os.path.getsize(filepath)
     rel = f"{now.year}/{filename}"
+    snapshot_json = json.dumps(items) if items else None
 
     con = get_db()
     cur = con.execute(
-        'INSERT INTO orders (po, notes, kerf, filename, size, total_bars, total_scrap) VALUES (?,?,?,?,?,?,?)',
-        (po or None, notes or None, kerf, rel, size, total_bars, total_scrap))
+        'INSERT INTO orders (po, notes, kerf, filename, size, total_bars, total_scrap, snapshot) VALUES (?,?,?,?,?,?,?,?)',
+        (po or None, notes or None, kerf, rel, size, total_bars, total_scrap, snapshot_json))
     con.commit()
     oid = cur.lastrowid
 
@@ -253,7 +257,7 @@ def api_create_order():
 @app.route('/api/orders', methods=['GET'])
 def api_list_orders():
     con = get_db()
-    rows = con.execute('SELECT id, created_at, po, notes, kerf, filename, size, total_bars, total_scrap FROM orders ORDER BY id DESC').fetchall()
+    rows = con.execute('SELECT id, created_at, po, notes, kerf, filename, size, total_bars, total_scrap, snapshot FROM orders ORDER BY id DESC').fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/orders/<int:oid>/pdf', methods=['GET'])
@@ -288,16 +292,13 @@ MAX_DP_STATES = 20000
 MAX_SECONDS = 2.0
 
 def _fits(total_len, n_pieces, kerf):
-    # il kerf si conta solo tra un pezzo e l'altro (n-1 tagli), come nella versione precedente
     return total_len + max(0, n_pieces - 1) * kerf <= BAR_LENGTH + 1e-9
 
 def _maximal_patterns(lengths, demands, kerf):
-    """Tutte le combinazioni 'massimali' di pezzi che stanno in una asta."""
     pats = []
     k = len(lengths)
     def rec(i, counts, used_len, used_n):
         if i == k:
-            # massimale: non si può aggiungere nessun altro pezzo ancora richiesto
             for j in range(k):
                 if counts[j] < demands[j] and _fits(used_len + lengths[j], used_n + 1, kerf):
                     return
@@ -314,7 +315,6 @@ def _maximal_patterns(lengths, demands, kerf):
     return pats
 
 def _ffd(pieces, kerf):
-    """Vecchio algoritmo First Fit Decreasing, usato come riserva. pieces = lista di lunghezze."""
     bars = []
     for length in sorted(pieces, reverse=True):
         for bar in bars:
@@ -326,9 +326,6 @@ def _ffd(pieces, kerf):
     return [b['p'] for b in bars]
 
 def _optimize_dp(pieces, kerf):
-    """pieces: lista di lunghezze. Ritorna lista di aste, ognuna lista di lunghezze.
-    Cerca il minimo numero di aste con una ricerca esatta sugli schemi di taglio;
-    se lo spazio di ricerca è troppo grande ripiega su FFD."""
     cnt = Counter(pieces)
     lengths = sorted(cnt.keys(), reverse=True)
     demands = [cnt[l] for l in lengths]
@@ -342,7 +339,6 @@ def _optimize_dp(pieces, kerf):
     class TooBig(Exception): pass
 
     def solve(rem):
-        # numero minimo di aste per coprire i pezzi rimanenti
         if not any(rem):
             return 0, None
         if rem in memo:
@@ -350,7 +346,7 @@ def _optimize_dp(pieces, kerf):
         states[0] += 1
         if states[0] > MAX_DP_STATES or time.time() - t0 > MAX_SECONDS:
             raise TooBig()
-        i0 = next(i for i, r in enumerate(rem) if r)   # il pezzo più lungo ancora da tagliare
+        i0 = next(i for i, r in enumerate(rem) if r)
         best = (10**9, None)
         seen = set()
         for p in pats:
@@ -372,7 +368,6 @@ def _optimize_dp(pieces, kerf):
     except TooBig:
         return _ffd(pieces, kerf)
 
-    # ricostruzione delle aste
     bars = []
     rem = tuple(demands)
     while any(rem):
@@ -382,16 +377,12 @@ def _optimize_dp(pieces, kerf):
             bar += [lengths[j]] * n
         bars.append(bar)
         rem = tuple(rem[j] - take[j] for j in range(len(rem)))
-    # prima le aste più piene, l'eventuale asta con avanzo grande resta per ultima
     bars.sort(key=lambda b: (-len(b), -sum(b)))
     return bars
 
 ILP_MAX_PATTERNS = 20000
 
 def _optimize_ilp(pieces, kerf):
-    """Ottimo con programmazione lineare intera (scipy/HiGHS).
-    Fase 1: minimo numero di aste. Fase 2: a parità di aste, meno schemi di taglio diversi
-    (così più aste identiche si possono tagliare insieme). Ritorna None se non disponibile."""
     try:
         import numpy as np
         from scipy.optimize import milp, LinearConstraint, Bounds
@@ -404,8 +395,7 @@ def _optimize_ilp(pieces, kerf):
     if not pats or len(pats) > ILP_MAX_PATTERNS:
         return None
     P = len(pats)
-    A = np.array(pats, dtype=float).T            # (tipi di pezzo) x (schemi)
-    # Fase 1
+    A = np.array(pats, dtype=float).T
     r1 = milp(c=np.ones(P), constraints=LinearConstraint(A, lb=d, ub=np.inf),
               integrality=np.ones(P), bounds=Bounds(0, np.inf),
               options={'time_limit': 6})
@@ -413,11 +403,10 @@ def _optimize_ilp(pieces, kerf):
         return None
     x = np.round(r1.x).astype(int)
     n_star = int(x.sum())
-    # Fase 2: meno schemi diversi, stesso numero di aste, pochi pezzi in eccesso
     eps = 1e-3
     c = np.concatenate([eps * A.sum(axis=0), np.ones(P)])
     A2 = np.hstack([A, np.zeros_like(A)])
-    link = np.hstack([np.eye(P), -n_star * np.eye(P)])      # x_p <= n_star * y_p
+    link = np.hstack([np.eye(P), -n_star * np.eye(P)])
     cons = [LinearConstraint(A2, lb=d, ub=np.inf),
             LinearConstraint(np.concatenate([np.ones(P), np.zeros(P)]).reshape(1, -1), lb=n_star, ub=n_star),
             LinearConstraint(link, lb=-np.inf, ub=0)]
@@ -428,7 +417,6 @@ def _optimize_ilp(pieces, kerf):
         x2 = np.round(r2.x[:P]).astype(int)
         if x2.sum() == n_star and (A @ x2 >= d - 1e-9).all():
             x = x2
-    # costruzione aste
     bars = []
     for pat, q in zip(pats, x):
         for _ in range(int(q)):
@@ -436,7 +424,6 @@ def _optimize_ilp(pieces, kerf):
             for j, n in enumerate(pat):
                 b += [lengths[j]] * n
             bars.append(b)
-    # tolgo i pezzi in eccesso dalle aste dei gruppi più piccoli (così si creano meno schemi nuovi)
     for j, l in enumerate(lengths):
         surplus = sum(b.count(l) for b in bars) - cnt[l]
         if surplus > 0:
@@ -445,14 +432,12 @@ def _optimize_ilp(pieces, kerf):
             for b in cand[:surplus]:
                 b.remove(l)
     bars = [b for b in bars if b]
-    # controllo finale: stessi pezzi richiesti, tutte le aste valide
     got = Counter(l for b in bars for l in b)
     if got != cnt or not all(_fits(sum(b), len(b), kerf) for b in bars):
         return None
     return bars
 
 def optimize_bars(pieces, kerf):
-    """Prima ILP (ottimo), poi ricerca esatta DP, poi FFD come ultima riserva."""
     try:
         res = _optimize_ilp(pieces, kerf)
         if res:
@@ -479,13 +464,11 @@ def api_cut():
             continue
         for p in profile['pieces_detail']:
             for _ in range(p['quantity'] * qty):
-                # il colore dei tappi non conta per il taglio: le aste sono tutte uguali
                 pieces.append((p['length_mm'], f"cp{profile['cp_num']:02d} {profile['tipo']}"))
 
     if not pieces:
         return jsonify({'bars': [], 'total_bars': 0, 'total_scrap': 0})
 
-    # raggruppa le descrizioni per lunghezza, poi ottimizza solo sulle lunghezze
     pool = {}
     for length, desc in pieces:
         pool.setdefault(length, []).append(desc)
@@ -504,7 +487,6 @@ def api_cut():
         out.append({'pieces': comp, 'used': round(bar['used'], 1),
                     'scrap': round(BAR_LENGTH - bar['used'], 1)})
 
-    # raggruppa le aste con lo stesso schema di taglio (le più numerose per prime)
     grouped = {}
     for b in out:
         grouped.setdefault((tuple(b['pieces']), b['used']), []).append(b)
