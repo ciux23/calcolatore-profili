@@ -47,6 +47,8 @@ tr.sub td{border-bottom:1px dashed #eee}
 tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
 .totals{background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
 .toolbar{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin:0 0 .8rem}
+.testmode{display:flex;align-items:center;gap:.4rem;font-size:14px;color:#555;cursor:pointer;user-select:none;margin-right:auto}
+.testmode input{cursor:pointer}
 .meta{background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:.8rem 1rem;margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap}
 .meta .field{display:flex;flex-direction:column;gap:.2rem;flex:1;min-width:200px}
 .meta label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
@@ -65,7 +67,7 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
 @media print {
   body{background:#fff;margin:0;padding:0;max-width:none;font-size:12px}
   h1{font-size:18px;margin:0 0 .6rem}
-  .tabs,.toolbar,.card,details,#tab-catalogo,.no-print,.kerf-selector{display:none !important}
+  .tabs,.toolbar,.card,details,#tab-catalogo,#tab-archivio,.no-print,.kerf-selector{display:none !important}
   .print-header{display:block;border-bottom:2px solid #222;padding-bottom:.6rem;margin-bottom:1rem}
   .print-header h1{margin:0;font-size:18px}
   .print-header .info{font-size:11px;color:#555;margin-top:.3rem}
@@ -98,6 +100,7 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
 <div class="tabs no-print">
   <button data-tab="ordine" class="active" onclick="switchTab('ordine')">📝 Ordine</button>
   <button data-tab="catalogo" onclick="switchTab('catalogo')">📖 Catalogo</button>
+  <button data-tab="archivio" onclick="switchTab('archivio')">📁 Archivio</button>
 </div>
 
 <div id="tab-ordine">
@@ -108,7 +111,7 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
 
   <div class="meta">
     <div class="field">
-      <label>Cliente / Commessa</label>
+      <label>Cliente / Commessa (PO)</label>
       <input type="text" id="metaCliente" placeholder="—" oninput="salvaMeta()">
     </div>
     <div class="field">
@@ -124,6 +127,7 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
   </div>
 
   <div class="toolbar no-print">
+    <label class="testmode"><input type="checkbox" id="testMode"> Solo test (non salva)</label>
     <button class="sec" onclick="azzera()">Azzera quantità</button>
     <button class="green" onclick="stampaPDF()">🖨️ Stampa / PDF</button>
   </div>
@@ -155,22 +159,32 @@ tr.sub td:first-child{padding-left:1.8rem;color:#555;font-style:italic}
   <div id="catalogoView"></div>
 </div>
 
+<div id="tab-archivio" style="display:none">
+  <h2>Archivio ordini di produzione (<span id="archCount">0</span>)</h2>
+  <div id="archivioView"></div>
+</div>
+
 <script>
 let PROFILI = [];
 const QTY = {};
 let KERF = 1;
-let cutSeq = 0;                 // scarta le risposte arrivate in ritardo
-let cutTimer = null;            // debounce del calcolo taglio
-let cutAbort = null;            // annulla la richiesta in corso
+let cutSeq = 0;
+let cutTimer = null;
+let cutAbort = null;
 let cutPromise = Promise.resolve();
-let editingPieces = null;       // id del profilo con editor pezzi aperto
+let editingPieces = null;
 let pezziEdit = [];
+let LAST_TOTAL_BARS = 0;
+let LAST_TOTAL_SCRAP = 0;
+let ARCHIVIO = [];
 
 function switchTab(n){
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===n));
   document.getElementById('tab-ordine').style.display = n==='ordine'?'':'none';
   document.getElementById('tab-catalogo').style.display = n==='catalogo'?'':'none';
+  document.getElementById('tab-archivio').style.display = n==='archivio'?'':'none';
   if(n==='catalogo') renderCatalogo();
+  if(n==='archivio') loadArchivio();
 }
 
 async function loadProfili(){
@@ -238,15 +252,13 @@ function caricaOrdine(){
   try{ salvato = JSON.parse(localStorage.getItem('ordine_qty')||'null'); }catch(e){}
   for(const k in QTY) delete QTY[k];
   if(!salvato || !salvato.qty){ banner.style.display = 'none'; return; }
-
   const validi = {};
   for(const k in salvato.qty){
     const p = PROFILI.find(x => String(x.id) === String(k));
     const v = parseInt(salvato.qty[k], 10);
-    if(p && v > 0) validi[p.id] = v;   // scarta i profili cancellati dal catalogo
+    if(p && v > 0) validi[p.id] = v;
   }
   Object.assign(QTY, validi);
-
   if(!Object.keys(validi).length){
     banner.style.display = 'none';
     try{ localStorage.removeItem('ordine_qty'); }catch(e){}
@@ -287,7 +299,6 @@ function renderLista(){
   }
   const schede = PROFILI.filter(p=>p.tipo==='schede');
   const tappi  = PROFILI.filter(p=>p.tipo==='tappi');
-
   let html = '';
   if(schede.length){
     html += '<div class="section-title"><h2>🔩 Schede</h2></div>';
@@ -347,7 +358,6 @@ function renderTotali(){
     const q = QTY[p.id] || 0;
     if(!q) continue;
     prof[p.code] = q;
-
     if(p.tipo === 'schede'){
       const key = p.variante === 'smussi' ? 'smussa' : 'dritta';
       const nSchede = p.cp_num * q;
@@ -367,11 +377,12 @@ function renderTotali(){
     if(cutTimer){ clearTimeout(cutTimer); cutTimer = null; }
     if(cutAbort){ cutAbort.abort(); cutAbort = null; }
     document.getElementById('cutResult').innerHTML = '';
+    LAST_TOTAL_BARS = 0;
+    LAST_TOTAL_SCRAP = 0;
     return;
   }
 
   let html = '<table><tr><th>Componente</th><th class="num">Quantità</th></tr>';
-
   for(const fin of ['dritta','smussa']){
     const d = schede[fin];
     if(!d.tot) continue;
@@ -408,7 +419,6 @@ function programmaTaglio(){
   cutTimer = setTimeout(()=>{ cutTimer = null; cutPromise = calcolaTaglio(); }, 400);
 }
 
-// usata dalla stampa: se c'e' un calcolo pendente lo esegue subito, altrimenti attende quello in corso
 async function attendiTaglio(){
   if(cutTimer){ clearTimeout(cutTimer); cutTimer = null; cutPromise = calcolaTaglio(); }
   await cutPromise;
@@ -426,6 +436,8 @@ async function calcolaTaglio(){
   if(cutAbort){ cutAbort.abort(); cutAbort = null; }
   if(!items.length){
     el.innerHTML = '';
+    LAST_TOTAL_BARS = 0;
+    LAST_TOTAL_SCRAP = 0;
     return;
   }
 
@@ -440,7 +452,9 @@ async function calcolaTaglio(){
     });
     if(!r.ok) throw new Error('risposta del server: HTTP ' + r.status);
     const data = await r.json();
-    if(mySeq !== cutSeq) return;   // nel frattempo l'ordine e' cambiato: questa risposta e' vecchia
+    if(mySeq !== cutSeq) return;
+    LAST_TOTAL_BARS = data.total_bars;
+    LAST_TOTAL_SCRAP = data.total_scrap;
 
     let html = '<h2>📏 Taglio Aste di Ottone (3000 mm)</h2>';
     html += `<div class="summary-cut">
@@ -449,7 +463,6 @@ async function calcolaTaglio(){
       <div style="align-self:center;font-size:12px;color:#666">Kerf usato: ${data.kerf} mm</div>
     </div>`;
 
-    // aste con lo stesso schema di taglio raggruppate (se il server non le invia, mostra le aste singole)
     const lista = (data.groups && data.groups.length) ? data.groups
       : data.bars.map(b => ({first:b.index, last:b.index, count:1, pieces:b.pieces, used:b.used, scrap:b.scrap}));
     for(const g of lista){
@@ -467,7 +480,7 @@ async function calcolaTaglio(){
     }
     el.innerHTML = html;
   }catch(e){
-    if(e.name === 'AbortError') return;      // richiesta annullata di proposito
+    if(e.name === 'AbortError') return;
     if(mySeq !== cutSeq) return;
     el.innerHTML = '<p class="err">Calcolo del taglio non riuscito: ' + escapeHtml(e.message) + '</p>';
   }finally{
@@ -626,7 +639,7 @@ async function eliminaProfilo(id){
   renderCatalogo();
 }
 
-// ---- STAMPA / PDF ----
+// ---- STAMPA / PDF + ARCHIVIAZIONE ----
 async function stampaPDF(){
   const cliente = document.getElementById('metaCliente').value.trim();
   const note = document.getElementById('metaNote').value.trim();
@@ -637,22 +650,182 @@ async function stampaPDF(){
     return;
   }
 
-  await attendiTaglio();   // il PDF deve contenere il taglio aggiornato, non quello vecchio
+  await attendiTaglio();   // aspetta che il piano di taglio sia pronto
 
   const now = new Date();
   const dataStr = now.toLocaleDateString('it-IT', {day:'2-digit',month:'2-digit',year:'numeric'});
   const oraStr = now.toLocaleTimeString('it-IT', {hour:'2-digit',minute:'2-digit'});
   let info = 'Data: ' + dataStr + ' ' + oraStr;
   if(cliente) info += ' &nbsp;·&nbsp; Cliente/Commessa: <strong>' + escapeHtml(cliente) + '</strong>';
-  if(note)    info += ' &nbsp;·&nbsp; Note: <em>' + escapeHtml(note) + '</em>';
+  if(note) info += ' &nbsp;·&nbsp; Note: <em>' + escapeHtml(note) + '</em>';
   document.getElementById('printInfo').innerHTML = info;
+  document.getElementById('metaCliente').setAttribute('value', cliente);
+  document.getElementById('metaNote').setAttribute('value', note);
 
-  const oldTitle = document.title;
-  const fname = 'Ordine' + (cliente ? '_' + cliente.replace(/\s+/g,'-') : '') + '_' + now.toISOString().slice(0,10);
-  document.title = fname;
+  const isTest = document.getElementById('testMode').checked;
 
-  window.print();
-  setTimeout(()=>{ document.title = oldTitle; }, 500);
+  if(isTest){
+    const oldTitle = document.title;
+    const fname = 'Ordine' + (cliente ? '_' + cliente.replace(/\s+/g,'-') : '') + '_' + now.toISOString().slice(0,10);
+    document.title = fname;
+    window.print();
+    setTimeout(()=>{ document.title = oldTitle; }, 500);
+    return;
+  }
+
+  if(!cliente){
+    const aggiungi = confirm('PO (Commessa) non inserito.\n\nOK = lo aggiungi prima di salvare\nAnnulla = continua senza PO');
+    if(aggiungi){
+      document.getElementById('metaCliente').focus();
+      return;
+    }
+  }
+
+  const items = [];
+  for(const p of PROFILI){
+    const q = QTY[p.id] || 0;
+    if(q > 0) items.push({ profile_id: p.id, quantity: q });
+  }
+
+  const htmlDoc = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+  const win = window.open('about:blank', '_blank');
+  try{
+    const r = await fetch('/api/orders', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        html: htmlDoc,
+        po: cliente,
+        notes: note,
+        kerf: KERF,
+        total_bars: LAST_TOTAL_BARS,
+        total_scrap: LAST_TOTAL_SCRAP,
+        items: items
+      })
+    });
+    if(!r.ok){
+      const e = await r.json().catch(()=>({}));
+      throw new Error(e.error || ('HTTP ' + r.status));
+    }
+    const data = await r.json();
+    if(win){
+      win.location.href = data.url;
+    }else{
+      alert('Ordine salvato. Il popup è stato bloccato dal browser: trova il PDF nella tab Archivio.');
+    }
+  }catch(e){
+    if(win) win.close();
+    alert('Errore salvataggio ordine: ' + e.message);
+  }
+}
+
+// ---- ARCHIVIO ----
+async function loadArchivio(){
+  const el = document.getElementById('archivioView');
+  try{
+    const r = await fetch('/api/orders');
+    if(!r.ok) throw new Error('risposta del server: HTTP ' + r.status);
+    ARCHIVIO = await r.json();
+  }catch(e){
+    el.innerHTML = '<p class="err">Errore caricamento archivio: ' + escapeHtml(e.message) + '</p>';
+    return;
+  }
+  renderArchivio();
+}
+
+function renderArchivio(){
+  document.getElementById('archCount').textContent = ARCHIVIO.length;
+  const el = document.getElementById('archivioView');
+  if(!ARCHIVIO.length){ el.innerHTML = '<p class="empty">Archivio vuoto. Gli ordini di produzione salvati compariranno qui.</p>'; return; }
+  let html = '<table><tr><th>Salvato il</th><th>PO / Commessa</th><th>Note</th><th class="num">Aste</th><th class="num">Scarto</th><th style="width:300px">Azioni</th></tr>';
+  for(const o of ARCHIVIO){
+    const when = formatDataOrdine(o.created_at);
+    const poTxt = o.po ? escapeHtml(o.po) : '<em class="muted">senza PO</em>';
+    const noteTxt = o.notes ? escapeHtml(o.notes) : '';
+    html += `<tr>
+      <td>${when}</td>
+      <td><strong>${poTxt}</strong></td>
+      <td><em class="muted">${noteTxt}</em></td>
+      <td class="num">${o.total_bars != null ? o.total_bars : '-'}</td>
+      <td class="num">${o.total_scrap != null ? o.total_scrap + ' mm' : '-'}</td>
+      <td>
+        <button class="sec" onclick="apriPdfOrdine(${o.id})">📄 Apri</button>
+        <button class="sec" onclick="scaricaPdfOrdine(${o.id})">⬇ Scarica</button>
+        <button class="sec" onclick="ricaricaOrdine(${o.id})">🔄 Ricarica</button>
+        <button class="danger" onclick="eliminaOrdine(${o.id})">🗑</button>
+      </td>
+    </tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+}
+
+function formatDataOrdine(s){
+  if(!s) return '-';
+  const d = new Date(s.replace(' ', 'T') + 'Z');
+  if(isNaN(d.getTime())) return s;
+  return d.toLocaleString('it-IT', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function apriPdfOrdine(id){
+  window.open('/api/orders/' + id + '/pdf', '_blank');
+}
+
+async function scaricaPdfOrdine(id){
+  const o = ARCHIVIO.find(x => x.id === id);
+  const nome = (o && o.filename) ? o.filename.split('/').pop() : ('ordine_' + id + '.pdf');
+  try{
+    const r = await fetch('/api/orders/' + id + '/pdf');
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  }catch(e){
+    alert('Errore download: ' + e.message);
+  }
+}
+
+function ricaricaOrdine(id){
+  const o = ARCHIVIO.find(x => x.id === id);
+  if(!o || !o.snapshot){ alert('Questo ordine non ha uno snapshot da ricaricare.'); return; }
+  let items;
+  try{ items = JSON.parse(o.snapshot); }catch(e){ alert('Snapshot non valido.'); return; }
+  if(!Array.isArray(items) || !items.length){ alert('Ordine vuoto.'); return; }
+  for(const k in QTY) delete QTY[k];
+  let applied = 0, skipped = 0;
+  for(const it of items){
+    const p = PROFILI.find(x => x.id === it.profile_id);
+    if(p && it.quantity > 0){ QTY[p.id] = it.quantity; applied++; }
+    else { skipped++; }
+  }
+  nascondiBanner();
+  salvaOrdine();
+  switchTab('ordine');
+  renderLista();
+  renderTotali();
+  let msg = 'Ordine ricaricato: ' + applied + ' profili con quantità.';
+  if(skipped) msg += '\n(' + skipped + ' profili non più presenti nel catalogo)';
+  alert(msg);
+}
+
+async function eliminaOrdine(id){
+  const o = ARCHIVIO.find(x => x.id === id);
+  const label = o && o.po ? o.po : 'senza PO';
+  if(!confirm('Eliminare l\'ordine "' + label + '"?\nIl PDF verrà cancellato definitivamente.')) return;
+  try{
+    const r = await fetch('/api/orders/' + id, {method:'DELETE'});
+    if(!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e.error || ('HTTP ' + r.status)); }
+    await loadArchivio();
+  }catch(e){
+    alert('Errore eliminazione: ' + e.message);
+  }
 }
 
 function escapeHtml(s){
