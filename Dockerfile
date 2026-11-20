@@ -1,6 +1,12 @@
 FROM python:3.11-slim
 WORKDIR /app
-RUN pip install --no-cache-dir flask==3.0.3 numpy==2.2.6 scipy==1.13.1
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz-subset0 \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir flask==3.0.3 numpy==2.2.6 scipy==1.13.1 weasyprint==70.0
 COPY app.py index.html ./
 RUN mkdir -p /data
 ENV DB_PATH=/data/profili.db
